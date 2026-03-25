@@ -4,7 +4,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from emfit_client import EmfitClient
@@ -83,6 +83,20 @@ def get_user():
     }
 
 
+@app.get("/api/user/profile")
+def get_user_profile():
+    """Get user profile as a flat object (no device_settings bundle)."""
+    c = get_client()
+    return c.get_user_flat()
+
+
+@app.put("/api/user")
+def update_user(payload: dict):
+    """Update user settings (locale, timezone, date/time format, etc.)."""
+    c = get_client()
+    return c.update_user(payload)
+
+
 # ── Device ────────────────────────────────────────────────────────────
 
 
@@ -94,11 +108,33 @@ def list_devices():
     return {"devices": data.get("device_settings", [])}
 
 
+@app.get("/api/devices/status")
+def get_all_device_statuses():
+    """Get presence status for all devices at once."""
+    c = get_client()
+    return c.get_device_status_all()
+
+
 @app.get("/api/device/{device_id}")
 def get_device(device_id: str):
     """Get device details (name, firmware, etc.)."""
     c = get_client()
     return c.get_device(device_id)
+
+
+@app.put("/api/device/{device_id}")
+def update_device(device_id: str, payload: dict):
+    """Update device settings (name, timezone, night mode window, etc.).
+
+    The payload is passed directly to the Emfit API. Common fields:
+    - `device_name`: device display name
+    - `gmt_offset`: timezone offset in seconds
+    - `night_start` / `night_end`: night mode window (e.g. "2300", "0700")
+    - `enabled_night`: enable/disable night mode
+    """
+    c = get_client()
+    payload["device_id"] = device_id
+    return c.update_device(payload)
 
 
 @app.get("/api/device/{device_id}/status")
@@ -115,11 +151,117 @@ def get_device_features(device_id: str):
     return c.get_device_features(device_id)
 
 
+@app.put("/api/device/{device_id}/features")
+def update_device_features(device_id: str, payload: dict):
+    """Update device feature flags.
+
+    Common fields:
+    - `enabled_naps`: enable nap tracking (bool)
+    - `enabled_raw`: enable raw data recording (bool)
+    - `enabled_night`: enable night mode (bool)
+    - `night_time_start` / `night_time_end`: night window times
+    """
+    c = get_client()
+    return c.update_device_features(device_id, payload)
+
+
 @app.get("/api/device/{device_id}/notifications")
 def get_notification_settings(device_id: str):
     """Get notification/alarm settings for device."""
     c = get_client()
     return c.get_notification_settings(device_id)
+
+
+@app.put("/api/device/{device_id}/notifications")
+def update_notification_settings(device_id: str, payload: dict):
+    """Update notification/alarm settings for device.
+
+    Common fields:
+    - `alarm_profile`: alarm type ("off", "smart", "fixed")
+    - `morning_alarm`: enable morning alarm (bool)
+    - `morning_alarm_time`: alarm time (e.g. "07:00")
+    - `afternoon_assurance`: enable afternoon assurance check (bool)
+    - `evening_assurance`: enable evening assurance check (bool)
+    - `sms_alert` / `email_alert`: enable alert channels (bool)
+    - `enable_apnea`: enable apnea alerts (bool)
+    """
+    c = get_client()
+    return c.update_notification_settings(device_id, payload)
+
+
+@app.get("/api/device/{device_id}/sync/status")
+def get_sync_statuses(device_id: str):
+    """Get external service sync statuses (Wellmo, UACF, etc.)."""
+    c = get_client()
+    return c.get_sync_statuses(device_id)
+
+
+@app.get("/api/device/{device_id}/paired-devices")
+def get_paired_devices(device_id: str):
+    """List paired devices associated with a device."""
+    c = get_client()
+    return c.get_paired_devices(device_id)
+
+
+@app.get("/api/device/{device_id}/export/data-removal-status")
+def get_data_removal_status(device_id: str):
+    """Check the status of a pending device data deletion request."""
+    c = get_client()
+    return c.get_data_removal_status(device_id)
+
+
+# ── Raw sensor data (原信号) ───────────────────────────────────────────
+
+
+@app.get("/api/device/{device_id}/raw")
+def get_raw_periods(device_id: str):
+    """List available raw sensor data recording periods.
+
+    Requires `enabled_raw` feature flag on the device.
+    Each period has an `oid` (ID), `start`, and `end` timestamp.
+    """
+    c = get_client()
+    try:
+        return c.get_raw_periods(device_id)
+    except PermissionError as e:
+        raise HTTPException(403, str(e))
+
+
+@app.get("/api/device/{device_id}/raw/{raw_period_id}/download")
+def download_raw_data(
+    device_id: str,
+    raw_period_id: str,
+    fmt: str = Query(default="csv", description="File format: 'csv' or 'edf'"),
+):
+    """Download raw sensor data for a recording period.
+
+    Requires `enabled_raw` feature flag. Supports CSV and EDF formats.
+    """
+    c = get_client()
+    try:
+        data = c.download_raw(device_id, raw_period_id, fmt)
+    except PermissionError as e:
+        raise HTTPException(403, str(e))
+    media_type = "application/octet-stream" if fmt == "edf" else "text/csv"
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename=raw_{raw_period_id}.{fmt}"},
+    )
+
+
+@app.get("/api/device/{device_id}/raw/{raw_period_id}")
+def get_raw_period(device_id: str, raw_period_id: str):
+    """Get raw sensor data for a specific recording period.
+
+    Requires `enabled_raw` feature flag.
+    Returns lo_band, hi_band, and integrated RR data arrays.
+    """
+    c = get_client()
+    try:
+        return c.get_raw_period(device_id, raw_period_id)
+    except PermissionError as e:
+        raise HTTPException(403, str(e))
 
 
 # ── Presence (Sleep Periods) ──────────────────────────────────────────
@@ -146,11 +288,47 @@ def get_latest_sleep(device_id: str):
     return c.get_presence_latest(device_id)
 
 
+@app.get("/api/device/{device_id}/sleep/{presence_id}/download")
+def download_sleep_csv(device_id: str, presence_id: str):
+    """Download a sleep period's raw data as CSV."""
+    c = get_client()
+    csv_bytes = c.download_presence(presence_id)
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=sleep_{presence_id}.csv"},
+    )
+
+
 @app.get("/api/device/{device_id}/sleep/{presence_id}")
 def get_sleep_period(device_id: str, presence_id: str):
     """Get a specific sleep period by its ID."""
     c = get_client()
     return c.get_presence(device_id, presence_id)
+
+
+@app.delete("/api/device/{device_id}/sleep/{presence_id}")
+def delete_sleep_period(device_id: str, presence_id: str):
+    """Delete a sleep period permanently."""
+    c = get_client()
+    return c.delete_presence(device_id, presence_id)
+
+
+class ShortenRequest(BaseModel):
+    shorten_from: int
+    shorten_to: int
+
+
+@app.post("/api/device/{device_id}/sleep/{presence_id}/shorten")
+def shorten_sleep_period(device_id: str, presence_id: str, req: ShortenRequest):
+    """Trim/shorten a sleep period by adjusting its start or end time.
+
+    Request body:
+    - `shorten_from`: new start timestamp (Unix seconds)
+    - `shorten_to`: new end timestamp (Unix seconds)
+    """
+    c = get_client()
+    return c.shorten_presence(presence_id, device_id, req.shorten_from, req.shorten_to)
 
 
 @app.get("/api/device/{device_id}/sleep/latest/summary")
@@ -262,6 +440,29 @@ def get_latest_minitrends(device_id: str):
     return {k: data[k] for k in minitrend_keys}
 
 
+# ── Notes ─────────────────────────────────────────────────────────────
+
+
+class NoteRequest(BaseModel):
+    presence_id: str
+    text: str
+    rating: int = 0
+
+
+@app.post("/api/note")
+def create_note(req: NoteRequest):
+    """Create a text note on a sleep period."""
+    c = get_client()
+    return c.create_note(req.presence_id, req.text, req.rating)
+
+
+@app.put("/api/note")
+def update_note(req: NoteRequest):
+    """Update an existing text note on a sleep period."""
+    c = get_client()
+    return c.update_note(req.presence_id, req.text, req.rating)
+
+
 # ── Trends ────────────────────────────────────────────────────────────
 
 
@@ -319,6 +520,63 @@ def get_monitor(device_id: str):
     """
     c = get_client()
     return c.get_monitor(device_id)
+
+
+@app.get("/api/device/{device_id}/monitor/since/{timestamp}")
+def get_monitor_since(device_id: str, timestamp: int):
+    """Get incremental realtime monitoring data since a given timestamp.
+
+    Use for polling: call this repeatedly with the last received timestamp
+    to get only new data without re-fetching everything.
+
+    - timestamp: Unix timestamp (seconds) of the last received datapoint
+    """
+    c = get_client()
+    return c.get_monitor_since(device_id, timestamp)
+
+
+# ── Maintenance ───────────────────────────────────────────────────────
+
+
+@app.get("/api/maintenance")
+def get_maintenance():
+    """Check if the Emfit service is currently under maintenance."""
+    c = get_client()
+    return c.get_maintenance()
+
+
+@app.get("/api/maintenance/message")
+def get_maintenance_message():
+    """Get the current maintenance announcement message (if any)."""
+    c = get_client()
+    return c.get_maintenance_message()
+
+
+# ── Data Export ───────────────────────────────────────────────────────
+
+
+class ExportRequest(BaseModel):
+    date_from: int | None = None
+    date_to: int | None = None
+
+
+@app.post("/api/device/{device_id}/export")
+def request_export(device_id: str, req: ExportRequest = ExportRequest()):
+    """Request a data export for a device.
+
+    Optional body:
+    - `date_from`: start Unix timestamp
+    - `date_to`: end Unix timestamp
+    """
+    c = get_client()
+    return c.request_export(device_id, req.date_from, req.date_to)
+
+
+@app.get("/api/device/{device_id}/export/status")
+def get_export_status(device_id: str):
+    """Check the status of a pending data export request."""
+    c = get_client()
+    return c.get_export_status(device_id)
 
 
 # ── Convenience: auto-detect device ──────────────────────────────────

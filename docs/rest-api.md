@@ -41,17 +41,36 @@ EMFIT_USERNAME=user@example.com EMFIT_PASSWORD=yourpassword python3 main.py
 
 | メソッド | パス | 説明 |
 |---|---|---|
-| GET | `/api/user` | ユーザー情報 |
+| GET | `/api/user` | ユーザー情報取得 (device_settings 含む全量) |
+| GET | `/api/user/profile` | ユーザープロフィール (フラット、device_settings なし) |
+| PUT | `/api/user` | ユーザー設定更新 |
 
 ### デバイス
 
 | メソッド | パス | 説明 |
 |---|---|---|
 | GET | `/api/devices` | デバイス一覧 |
+| GET | `/api/devices/status` | 全デバイスの在床状態 (一括) |
 | GET | `/api/device/{device_id}` | デバイス詳細 |
+| PUT | `/api/device/{device_id}` | デバイス設定更新 |
 | GET | `/api/device/{device_id}/status` | 在床状態 |
-| GET | `/api/device/{device_id}/features` | 機能フラグ |
-| GET | `/api/device/{device_id}/notifications` | 通知設定 |
+| GET | `/api/device/{device_id}/features` | 機能フラグ取得 |
+| PUT | `/api/device/{device_id}/features` | 機能フラグ更新 |
+| GET | `/api/device/{device_id}/notifications` | 通知設定取得 |
+| PUT | `/api/device/{device_id}/notifications` | 通知設定更新 |
+| GET | `/api/device/{device_id}/sync/status` | 外部連携ステータス |
+| GET | `/api/device/{device_id}/paired-devices` | ペアリングデバイス一覧 |
+| GET | `/api/device/{device_id}/export/data-removal-status` | データ削除リクエスト状態 |
+
+### 原信号データ (Raw sensor data)
+
+> `enabled_raw` 機能フラグが有効なデバイスのみ利用可能。無効の場合は 403 を返す。
+
+| メソッド | パス | 説明 |
+|---|---|---|
+| GET | `/api/device/{device_id}/raw` | 原信号記録期間の一覧 |
+| GET | `/api/device/{device_id}/raw/{raw_period_id}` | 特定期間の原信号データ |
+| GET | `/api/device/{device_id}/raw/{raw_period_id}/download` | 原信号データのダウンロード (CSV/EDF) |
 
 ### 睡眠データ
 
@@ -62,6 +81,16 @@ EMFIT_USERNAME=user@example.com EMFIT_PASSWORD=yourpassword python3 main.py
 | GET | `/api/device/{device_id}/sleep/latest/timeseries` | 最新の時系列データ |
 | GET | `/api/device/{device_id}/sleep/latest/minitrends` | 7日間ミニトレンド |
 | GET | `/api/device/{device_id}/sleep/{presence_id}` | 特定の睡眠期間 |
+| DELETE | `/api/device/{device_id}/sleep/{presence_id}` | 睡眠期間の削除 |
+| POST | `/api/device/{device_id}/sleep/{presence_id}/shorten` | 睡眠期間のトリミング |
+| GET | `/api/device/{device_id}/sleep/{presence_id}/download` | 睡眠データ CSV ダウンロード |
+
+### メモ
+
+| メソッド | パス | 説明 |
+|---|---|---|
+| POST | `/api/note` | 睡眠期間にメモ・評価を作成 |
+| PUT | `/api/note` | 睡眠期間のメモ・評価を更新 |
 
 ### トレンド・タイムライン
 
@@ -75,6 +104,21 @@ EMFIT_USERNAME=user@example.com EMFIT_PASSWORD=yourpassword python3 main.py
 | メソッド | パス | 説明 |
 |---|---|---|
 | GET | `/api/device/{device_id}/monitor` | リアルタイムデータ |
+| GET | `/api/device/{device_id}/monitor/since/{timestamp}` | 差分データ取得 (ポーリング用) |
+
+### データエクスポート
+
+| メソッド | パス | 説明 |
+|---|---|---|
+| POST | `/api/device/{device_id}/export` | データエクスポート要求 |
+| GET | `/api/device/{device_id}/export/status` | エクスポート状態確認 |
+
+### メンテナンス
+
+| メソッド | パス | 説明 |
+|---|---|---|
+| GET | `/api/maintenance` | メンテナンス状態確認 |
+| GET | `/api/maintenance/message` | メンテナンスアナウンスメッセージ |
 
 ---
 
@@ -174,6 +218,21 @@ EMFIT_USERNAME=user@example.com EMFIT_PASSWORD=yourpassword python3 main.py
 
 ---
 
+### PUT `/api/user`
+
+ユーザー設定を更新する。変更したいフィールドのみ送信可。
+
+**リクエスト例:**
+```json
+{
+  "locale": "en_US",
+  "time_format": "H12",
+  "date_format": "MM-DD"
+}
+```
+
+---
+
 ### GET `/api/devices`
 
 **レスポンス:**
@@ -204,6 +263,12 @@ EMFIT_USERNAME=user@example.com EMFIT_PASSWORD=yourpassword python3 main.py
 
 ---
 
+### GET `/api/devices/status`
+
+全デバイスの在床状態を一括取得。
+
+---
+
 ### GET `/api/device/{device_id}`
 
 **レスポンス:**
@@ -213,6 +278,21 @@ EMFIT_USERNAME=user@example.com EMFIT_PASSWORD=yourpassword python3 main.py
   "firmware": "120.2.2.1",
   "field1": null,
   "field2": null
+}
+```
+
+---
+
+### PUT `/api/device/{device_id}`
+
+デバイス設定を更新する。変更したいフィールドのみ送信可。
+
+**リクエスト例:**
+```json
+{
+  "device_name": "bedroom-sensor",
+  "night_start": "2230",
+  "night_end": "0730"
 }
 ```
 
@@ -246,6 +326,73 @@ EMFIT_USERNAME=user@example.com EMFIT_PASSWORD=yourpassword python3 main.py
   "fm_enable": false
 }
 ```
+
+---
+
+### PUT `/api/device/{device_id}/features`
+
+機能フラグを更新する。変更したいフィールドのみ送信可。
+
+**リクエスト例:**
+```json
+{
+  "enabled_naps": true,
+  "enabled_night": true,
+  "night_time_start": "23:00",
+  "night_time_end": "07:00"
+}
+```
+
+---
+
+### GET `/api/device/{device_id}/notifications`
+
+**レスポンス:**
+```json
+{
+  "device_id": "1234",
+  "sms_alert": false,
+  "email_alert": false,
+  "alarm_profile": "off",
+  "morning_alarm": false,
+  "morning_alarm_time": "07:00",
+  "afternoon_assurance": false,
+  "afternoon_assurance_duration": 6,
+  "evening_assurance": false,
+  "night_alarm_time": "21:00",
+  "night_alarm_tolerance": 20,
+  "night_alarm_bedreturn": true,
+  "enable_apnea": false,
+  "enable_fm": false
+}
+```
+
+---
+
+### PUT `/api/device/{device_id}/notifications`
+
+通知・アラーム設定を更新する。変更したいフィールドのみ送信可。
+
+**リクエスト例:**
+```json
+{
+  "morning_alarm": true,
+  "morning_alarm_time": "07:30",
+  "alarm_profile": "smart"
+}
+```
+
+---
+
+### GET `/api/device/{device_id}/sync/status`
+
+Wellmo, UACF など外部サービスとの連携状態を取得。
+
+---
+
+### GET `/api/device/{device_id}/paired-devices`
+
+ペアリングされたデバイスの一覧を取得。
 
 ---
 
@@ -409,6 +556,59 @@ EMFIT_USERNAME=user@example.com EMFIT_PASSWORD=yourpassword python3 main.py
 
 ---
 
+### DELETE `/api/device/{device_id}/sleep/{presence_id}`
+
+指定した睡眠期間を削除する。**この操作は取り消しできない。**
+
+---
+
+### POST `/api/device/{device_id}/sleep/{presence_id}/shorten`
+
+睡眠期間の開始・終了時刻をトリミングする。
+
+**リクエスト:**
+```json
+{
+  "shorten_from": 1774373500,
+  "shorten_to": 1774396000
+}
+```
+
+---
+
+### GET `/api/device/{device_id}/sleep/{presence_id}/download`
+
+睡眠データを CSV 形式でダウンロードする。レスポンスの Content-Type は `text/csv`。
+
+---
+
+### POST `/api/note`
+
+睡眠期間にテキストメモと評価を追加する。
+
+**リクエスト:**
+```json
+{
+  "presence_id": "aabbccdd1122334455667788",
+  "text": "昨夜は少し遅く寝た",
+  "rating": 0
+}
+```
+
+| フィールド | 型 | 説明 |
+|---|---|---|
+| `presence_id` | string | 睡眠期間ID (MongoDB ObjectId) |
+| `text` | string | メモのテキスト |
+| `rating` | int | 評価値 (デフォルト: 0) |
+
+---
+
+### PUT `/api/note`
+
+既存のメモを更新する。リクエスト形式は POST と同じ。
+
+---
+
 ### GET `/api/device/{device_id}/trends`
 
 日次集計のトレンドデータ。
@@ -506,6 +706,45 @@ EMFIT_USERNAME=user@example.com EMFIT_PASSWORD=yourpassword python3 main.py
 |---|---|---|
 | `measured_datapoints` | `[timestamp, hr, rr, activity]` | 現在のバイタルデータ |
 | `hrv_epochs` | `[timestamp, rmssd, lf, hf, 0, score]` | 現在のHRVデータ |
+
+---
+
+### GET `/api/device/{device_id}/monitor/since/{timestamp}`
+
+指定タイムスタンプ以降の差分データのみを取得。ポーリングに使用する。
+
+**パスパラメータ:**
+- `timestamp`: 前回取得した最後のタイムスタンプ (秒)
+
+**使用例 (定期ポーリング):**
+```python
+last_ts = 0
+while True:
+    data = requests.get(f"/api/device/{device_id}/monitor/since/{last_ts}").json()
+    if data["measured_datapoints"]:
+        last_ts = data["measured_datapoints"][-1][0]
+    time.sleep(5)
+```
+
+---
+
+### POST `/api/device/{device_id}/export`
+
+デバイスの全データエクスポートを要求する。エクスポートは非同期処理。
+
+**レスポンス:** エクスポートリクエストの状態
+
+---
+
+### GET `/api/device/{device_id}/export/status`
+
+データエクスポートの進行状態を確認する。
+
+---
+
+### GET `/api/maintenance`
+
+Emfit サービスのメンテナンス状態を確認する。
 
 ---
 
